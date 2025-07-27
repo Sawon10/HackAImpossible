@@ -1,0 +1,24 @@
+# ✅ Required for speech-to-text
+SpeechRecognition
+pyaudio
+
+# 🌱 LangGraph & LangChain ecosystem
+langgraph
+langchain
+langchain-community
+langchain-google-genai
+
+# 🧠 Google Gemini + Vector Embedding
+google-generativeai
+google-cloud-aiplatform
+faiss-cpu
+
+# 📄 PDF Handling
+pdfrw
+pymupdf  # Provides fitz interface
+pypdf    # For PDF parsing if needed additionally
+
+# ⚙️ Utilities
+tqdm
+python-dotenv
+pipwin
