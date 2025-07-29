@@ -1,27 +1,25 @@
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
-from pdfrw import PdfReader, PdfWriter, PageMerge
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.vectorstores import FAISS
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langgraph.graph import StateGraph, END
+from langchain.chains import RetrievalQA
 from Util import create_filled_pdf, speech_to_text
+from typing import List
 
 # Load .env variables
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+genai.configure(api_key=GEMINI_API_KEY)
+
 # Step 1: Load Form Templates
 form_templates = {
     "loan": {
         "path": "./docs/loan_form_template.pdf",
-        "fields": ["name", "dob", "income", "loan_amount"]
     },
     "credit_card": {
         "path": "./docs/credit_card_form_template.pdf",
-        "fields": ["name", "dob", "annual_spend", "credit_score"]
     }
 }
 
@@ -38,6 +36,40 @@ initial_state = {
     "form_type": None
 }
 
+def extract_fields_from_pdf(form_path: str) -> List[str]:
+    # Load PDF pages
+    loader = PyPDFLoader(form_path)
+    documents = loader.load_and_split()
+
+    # Merge and truncate PDF text content
+    full_content = "\n\n".join([doc.page_content for doc in documents])[:8000]
+
+    # Create manual prompt
+    manual_prompt = (
+        "You're analyzing a form PDF. Based on the following content, extract and return only the list of form fields "
+        "that a user is expected to fill out.\n\n"
+        "Respond ONLY with a valid Python list of strings. Do NOT include any explanation, markdown, or code formatting.\n\n"
+        f"{full_content}"
+    )
+
+    try:
+        # Initialize Gemini model
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
+        response = model.generate_content(manual_prompt).text.strip()
+
+        print("🧠 Gemini Response:", response)
+
+        # Try to parse the response into a Python list
+        fields = eval(response)
+        if isinstance(fields, list):
+            return [f.lower() for f in fields]
+    except Exception as e:
+        print("❌ Failed to extract fields:", e)
+
+    return []
+
+
 # Step 3: Define Nodes
 
 def select_form_type(state):
@@ -48,20 +80,16 @@ def select_form_type(state):
         form_type = "loan"
 
     selected_form = form_templates[form_type]
-    loader = PyPDFLoader(selected_form["path"])
-    documents = loader.load_and_split()
+    form_path = selected_form["path"]
 
-    embedding = GoogleGenerativeAIEmbeddings(model="models/embedding-001",
-                                             google_api_key=GEMINI_API_KEY)  # Replace with Gemini embedding when available
-    vectorstore = FAISS.from_documents(documents, embedding)
-    retriever = vectorstore.as_retriever()
+    fields = extract_fields_from_pdf(form_path)
+    print("📝 Extracted fields:", fields)
 
     return {
         **state,
         "form_type": form_type,
         "form": {"name": f"{form_type.title()} Form"},
-        "fields_required": selected_form["fields"],
-        "docs": documents
+        "fields_required": fields,
     }
 
 def detect_next_field(state):
@@ -77,7 +105,6 @@ def prompt_for_field(state):
 
 
 def validate_and_store_field(state):
-    import google.generativeai as genai
 
     field = state["current_field"]
     user_input = state["query"]
