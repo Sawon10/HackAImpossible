@@ -3,9 +3,9 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langgraph.graph import StateGraph, END
-from langchain.chains import RetrievalQA
-from Util import create_filled_pdf, speech_to_text
+from Util import create_filled_pdf, speech_to_text, get_form_templates
 from typing import List
+from validationModel import init_validation_agent
 
 # Load .env variables
 load_dotenv()
@@ -14,14 +14,7 @@ GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Step 1: Load Form Templates
-form_templates = {
-    "loan": {
-        "path": "./docs/loan_form_template.pdf",
-    },
-    "credit_card": {
-        "path": "./docs/credit_card_form_template.pdf",
-    }
-}
+form_templates = get_form_templates(os.getenv("FORM_TEMPLATES"))
 
 # Step 2: Define State
 initial_state = {
@@ -73,7 +66,7 @@ def extract_fields_from_pdf(form_path: str) -> List[str]:
 # Step 3: Define Nodes
 
 def select_form_type(state):
-    print("🗣️ Which form do you want to fill? (loan / credit_card)")
+    print("🗣️ Which form do you want to fill? ")
     form_type = input("You: ").strip().lower()
     if form_type not in form_templates:
         print("⚠️ Invalid form type, defaulting to 'loan'")
@@ -104,56 +97,86 @@ def prompt_for_field(state):
     return {**state, "query": user_input}
 
 
-def validate_and_store_field(state):
+# def validate_and_store_field(state):
 
+#     field = state["current_field"]
+#     user_input = state["query"]
+
+#     genai.configure(api_key=GEMINI_API_KEY)
+#     model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
+#     prompt = f"""You are a strict data validator for a form field.
+
+#         Field: {field}
+#         Input: {user_input}
+
+#         Validation rules:
+#         - For 'dob':
+#             - Must be a valid date.
+#             - Acceptable formats: YYYY-MM-DD, DD-MM-YYYY, or 'DD Month YYYY'.
+#             - The date must be in the past (user must already be born).
+#         - For other fields:
+#             - Must be a valid input based on the field type.
+#             - For example, 'income' should be a positive number, 'credit_score' should be a number between 300 and 850, etc.
+
+#         If the input is valid, respond with the input exactly as provided.
+#         If the input is invalid, respond with only: invalid
+
+#         Examples:
+#         Input: 1992-04-28 (valid dob) → 1992-04-28
+#         Input: 28-04-1992 (valid dob) → 28-04-1992
+#         Input: 28 April 1992 (valid dob) → 28-04-1992
+#         Input: 2025-01-01 (future dob) → invalid
+#         Input: -5000 (income) → invalid
+#         Input: 750 (credit_score) → 750
+#     """
+
+#     response = model.generate_content(prompt).text.strip().lower()
+#     print("Model response:", response)  # Debug: See what the model returns
+
+#     if "invalid" in response:
+#         print(f"⚠️ Invalid input for {field}, please try again.")
+#         return state  # repeat same field
+
+#     updated_values = state["field_values"].copy()
+#     updated_values[field] = response
+#     return {**state, "field_values": updated_values}
+
+def validate_and_store_field(state):
     field = state["current_field"]
     user_input = state["query"]
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
-    prompt = f"""You are a strict data validator for a form field.
+    # Build a user message the agent can interpret
+    message = (
+        f"Field: {field}\n"
+        f"Value: {user_input}\n"
+        "Please validate this value appropriately using your tools."
+    )
 
-        Field: {field}
-        Input: {user_input}
+    # Prepare agent input
+    agent_input = {
+        "messages": [{"role": "user", "content": message}]
+    }
 
-        Validation rules:
-        - For 'dob':
-            - Must be a valid date.
-            - Acceptable formats: YYYY-MM-DD, DD-MM-YYYY, or 'DD Month YYYY'.
-            - The date must be in the past (user must already be born).
-        - For other fields:
-            - Must be a valid input based on the field type.
-            - For example, 'income' should be a positive number, 'credit_score' should be a number between 300 and 850, etc.
+    # Invoke the ReAct validation agent (this calls the appropriate tool internally)
+    validation_agent = init_validation_agent()
+    result = validation_agent.invoke(agent_input)
+    response = result["messages"][-1].content.strip().lower()
 
-        If the input is valid, respond with the input exactly as provided.
-        If the input is invalid, respond with only: invalid
+    print(f"Agent validation response for '{field}': {response}")
 
-        Examples:
-        Input: 1992-04-28 (valid dob) → 1992-04-28
-        Input: 28-04-1992 (valid dob) → 28-04-1992
-        Input: 28 April 1992 (valid dob) → 28-04-1992
-        Input: 2025-01-01 (future dob) → invalid
-        Input: -5000 (income) → invalid
-        Input: 750 (credit_score) → 750
-    """
+    if response == "invalid":
+        print(f"⚠️ Invalid input for field '{field}', please try again.")
+        return state  # Keep same field, await corrected input
 
-    response = model.generate_content(prompt).text.strip().lower()
-    print("Model response:", response)  # Debug: See what the model returns
-
-    if "invalid" in response:
-        print(f"⚠️ Invalid input for {field}, please try again.")
-        return state  # repeat same field
-
+    # Save validated result
     updated_values = state["field_values"].copy()
     updated_values[field] = response
     return {**state, "field_values": updated_values}
 
 
-
 def finalize_form(state):
     form_output = state["field_values"]
     form_type = state["form_type"]
-    form_path = form_templates[form_type]["path"]
     filled_path = f"./filled_forms/{form_type}_filled"
 
     create_filled_pdf(filled_path, form_output)
@@ -202,5 +225,5 @@ compiled_graph = form_graph.compile()
 
 # Step 5: Run
 if __name__ == "__main__":
-    final_state = compiled_graph.invoke(initial_state)
+    final_state = compiled_graph.invoke(initial_state, config={"verbose": True, "recursion_limit": 100})
     print("\n📄 Final State:", final_state)
