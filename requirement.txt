@@ -25,3 +25,4 @@ tqdm
 python-dotenv
 pipwin
 dateparser
+pyttsx3

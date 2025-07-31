@@ -3,6 +3,19 @@ import os
 import json
 import speech_recognition as sr
 from datetime import date
+import pyttsx3
+
+
+def speak_text(text: str):
+    """
+    Convert the given text to speech and speak it aloud.
+
+    Args:
+        text (str): The text to be spoken.
+    """
+    engine = pyttsx3.init()
+    engine.say(text)
+    engine.runAndWait()
 
 def get_form_templates(form_templates_raw):
     try:
