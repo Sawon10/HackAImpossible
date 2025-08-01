@@ -2,10 +2,13 @@ import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 from langchain_community.document_loaders.pdf import PyPDFLoader
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from Util import create_filled_pdf, speech_to_text, get_form_templates
 from typing import List
+from langchain_core.messages import BaseMessage
 from validationModel import init_validation_agent
+from Conversational_agent import conversational_speech_agent
 
 # Load .env variables
 load_dotenv()
@@ -26,7 +29,8 @@ initial_state = {
     "fields_required": [],
     "field_values": {},
     "current_field": None,
-    "form_type": None
+    "form_type": None,
+    "conversation_history": []
 }
 
 def extract_fields_from_pdf(form_path: str) -> List[str]:
@@ -85,61 +89,50 @@ def select_form_type(state):
         "fields_required": fields,
     }
 
-def detect_next_field(state):
-    remaining = [f for f in state["fields_required"] if f not in state["field_values"]]
-    if remaining:
-        return {**state, "current_field": remaining[0]}
-    return state
+# def detect_next_field(state):
+#     conversational_speech_agent("", state)
+#     remaining = [f for f in state["fields_required"] if f not in state["field_values"]]
+#     if remaining:
+#         return {**state, "current_field": remaining[0]}
+#     return state
 
-def prompt_for_field(state):
-    field = state["current_field"]
-    user_input = speech_to_text(f"Please provide your {field}:")
-    return {**state, "query": user_input}
-
-
-# def validate_and_store_field(state):
-
+# def prompt_for_field(state):
 #     field = state["current_field"]
-#     user_input = state["query"]
+#     user_input = speech_to_text(f"Please provide your {field}:")
+#     return {**state, "query": user_input}/
 
-#     genai.configure(api_key=GEMINI_API_KEY)
-#     model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
-#     prompt = f"""You are a strict data validator for a form field.
+def conversational_orchestration(state):
+    remaining = [f for f in state["fields_required"] if f not in state["field_values"]]
+    if not remaining:
+        return state  # Already complete
 
-#         Field: {field}
-#         Input: {user_input}
+    current_field = remaining[0]
+    filled_summary = ", ".join(f"{k}: {v}" for k, v in state["field_values"].items()) if state["field_values"] else "none"
+    remaining_fields = ", ".join(remaining)
+    prompt = (
+        f"You are filling the form '{state.get('form_type', 'unknown')}'. "
+        f"Fields filled: {filled_summary}. "
+        f"Remaining: {remaining_fields}. "
+        f"Please provide your {current_field}. "
+        "Say 'skip' to omit this field or ask for help if confused."
+    )
 
-#         Validation rules:
-#         - For 'dob':
-#             - Must be a valid date.
-#             - Acceptable formats: YYYY-MM-DD, DD-MM-YYYY, or 'DD Month YYYY'.
-#             - The date must be in the past (user must already be born).
-#         - For other fields:
-#             - Must be a valid input based on the field type.
-#             - For example, 'income' should be a positive number, 'credit_score' should be a number between 300 and 850, etc.
+    # Gather conversation history for richer context
+    history = state.get("conversation_history", [])
+    messages = [SystemMessage(content=prompt)] + history
 
-#         If the input is valid, respond with the input exactly as provided.
-#         If the input is invalid, respond with only: invalid
+    # The agent will prompt, listen, clarify and give a reply
+    user_response = conversational_speech_agent(messages=messages)
+    # Update conversation history
+    new_history = history + [SystemMessage(content=prompt), HumanMessage(content=user_response)]
 
-#         Examples:
-#         Input: 1992-04-28 (valid dob) → 1992-04-28
-#         Input: 28-04-1992 (valid dob) → 28-04-1992
-#         Input: 28 April 1992 (valid dob) → 28-04-1992
-#         Input: 2025-01-01 (future dob) → invalid
-#         Input: -5000 (income) → invalid
-#         Input: 750 (credit_score) → 750
-#     """
-
-#     response = model.generate_content(prompt).text.strip().lower()
-#     print("Model response:", response)  # Debug: See what the model returns
-
-#     if "invalid" in response:
-#         print(f"⚠️ Invalid input for {field}, please try again.")
-#         return state  # repeat same field
-
-#     updated_values = state["field_values"].copy()
-#     updated_values[field] = response
-#     return {**state, "field_values": updated_values}
+    # Pass user reply to validator in state
+    return {
+        **state,
+        "current_field": current_field,
+        "query": user_response,
+        "conversation_history": new_history
+    }
 
 def validate_and_store_field(state):
     field = state["current_field"]
@@ -202,22 +195,21 @@ class FormState(TypedDict):
     field_values: Dict[str, str]
     current_field: Optional[str]
     form_type: Optional[str]
+    conversation_history: List[BaseMessage]
 
 # Define the state graph
 form_graph = StateGraph(FormState)
 form_graph.add_node("select_form", select_form_type)
-form_graph.add_node("detect_field", detect_next_field)
-form_graph.add_node("ask_field", prompt_for_field)
 form_graph.add_node("validate_store", validate_and_store_field)
 form_graph.add_node("finalize", finalize_form)
+form_graph.add_node("conversational_orchestration", conversational_orchestration)
 
 form_graph.set_entry_point("select_form")
-form_graph.add_edge("select_form", "detect_field")
-form_graph.add_edge("detect_field", "ask_field")
-form_graph.add_edge("ask_field", "validate_store")
+form_graph.add_edge("select_form", "conversational_orchestration")
+form_graph.add_edge("conversational_orchestration", "validate_store")
 form_graph.add_conditional_edges(
     "validate_store",
-    lambda state: "detect_field" if len(state["field_values"]) < len(state["fields_required"]) else "finalize"
+    lambda state: "conversational_orchestration" if len(state["field_values"]) < len(state["fields_required"]) else "finalize"
 )
 form_graph.add_edge("finalize", END)
 
