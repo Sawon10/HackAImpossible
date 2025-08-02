@@ -1,14 +1,16 @@
 import os
+import queue
 from dotenv import load_dotenv
 import google.generativeai as genai
 from langchain_community.document_loaders.pdf import PyPDFLoader
-from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
-from Util import create_filled_pdf, speech_to_text, get_form_templates
+from typing import Dict, List
 from typing import List
 from langchain_core.messages import BaseMessage
 from validationModel import init_validation_agent
 from Conversational_agent import conversational_speech_agent
+from Util import create_filled_pdf, get_form_templates
+
 
 # Load .env variables
 load_dotenv()
@@ -30,7 +32,7 @@ initial_state = {
     "field_values": {},
     "current_field": None,
     "form_type": None,
-    "conversation_history": []
+    "current_field_validation": None,
 }
 
 def extract_fields_from_pdf(form_path: str) -> List[str]:
@@ -89,50 +91,46 @@ def select_form_type(state):
         "fields_required": fields,
     }
 
-# def detect_next_field(state):
-#     conversational_speech_agent("", state)
-#     remaining = [f for f in state["fields_required"] if f not in state["field_values"]]
-#     if remaining:
-#         return {**state, "current_field": remaining[0]}
-#     return state
+def conversational_orchestration(state: Dict) -> Dict:
+    """
+    Orchestrator node that selects the next field to fill,
+    invokes the conversational agent loop to get and confirm value,
+    updates state and conversation history accordingly.
+    """
 
-# def prompt_for_field(state):
-#     field = state["current_field"]
-#     user_input = speech_to_text(f"Please provide your {field}:")
-#     return {**state, "query": user_input}/
+    required_fields: List[str] = state.get("fields_required", [])
+    field_values: Dict[str, str] = state.get("field_values", {})
+    conversation_history: List[BaseMessage] = state.get("conversation_history", [])
 
-def conversational_orchestration(state):
-    remaining = [f for f in state["fields_required"] if f not in state["field_values"]]
-    if not remaining:
-        return state  # Already complete
+    # Determine remaining fields to fill
+    remaining_fields = [f for f in required_fields if f not in field_values]
 
-    current_field = remaining[0]
-    filled_summary = ", ".join(f"{k}: {v}" for k, v in state["field_values"].items()) if state["field_values"] else "none"
-    remaining_fields = ", ".join(remaining)
-    prompt = (
-        f"You are filling the form '{state.get('form_type', 'unknown')}'. "
-        f"Fields filled: {filled_summary}. "
-        f"Remaining: {remaining_fields}. "
-        f"Please provide your {current_field}. "
-        "Say 'skip' to omit this field or ask for help if confused."
-    )
+    # If no remaining fields, return state to proceed to finalize
+    if not remaining_fields:
+        return state
 
-    # Gather conversation history for richer context
-    history = state.get("conversation_history", [])
-    messages = [SystemMessage(content=prompt)] + history
+    current_field = remaining_fields[0]
+    validation_failed = state.get("current_field_validation", False)
 
-    # The agent will prompt, listen, clarify and give a reply
-    user_response = conversational_speech_agent(messages=messages)
-    # Update conversation history
-    new_history = history + [SystemMessage(content=prompt), HumanMessage(content=user_response)]
+    # Build minimal context for conversational agent
+    context = {
+        "field": current_field,
+        "fields_filled": field_values,
+        "validation_failed": validation_failed,
+    }
 
-    # Pass user reply to validator in state
+    # Run the interactive agent dialog loop to get confirmed input and updated history
+    confirmed_value = conversational_speech_agent(context)
+
+    # Update state with returned values
+    # Reset validation flag for next iteration
     return {
         **state,
         "current_field": current_field,
-        "query": user_response,
-        "conversation_history": new_history
+        "query": confirmed_value,
+        "current_field_validation": None,
     }
+
 
 def validate_and_store_field(state):
     field = state["current_field"]
@@ -159,12 +157,12 @@ def validate_and_store_field(state):
 
     if response == "invalid":
         print(f"⚠️ Invalid input for field '{field}', please try again.")
-        return state  # Keep same field, await corrected input
+        return {**state, "current_field_validation": False}  # Keep same field, await corrected input
 
     # Save validated result
     updated_values = state["field_values"].copy()
     updated_values[field] = response
-    return {**state, "field_values": updated_values}
+    return {**state, "field_values": updated_values, "current_field_validation": True}
 
 
 def finalize_form(state):
@@ -195,7 +193,7 @@ class FormState(TypedDict):
     field_values: Dict[str, str]
     current_field: Optional[str]
     form_type: Optional[str]
-    conversation_history: List[BaseMessage]
+    current_field_validation: Optional[bool]
 
 # Define the state graph
 form_graph = StateGraph(FormState)
