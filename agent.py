@@ -1,12 +1,10 @@
 import os
-import queue
 from dotenv import load_dotenv
 import google.generativeai as genai
 from langchain_community.document_loaders.pdf import PyPDFLoader
 from langgraph.graph import StateGraph, END
 from typing import Dict, List
 from typing import List
-from langchain_core.messages import BaseMessage
 from validationModel import init_validation_agent
 from Conversational_agent import conversational_speech_agent
 from Util import create_filled_pdf, get_form_templates
@@ -100,8 +98,6 @@ def conversational_orchestration(state: Dict) -> Dict:
 
     required_fields: List[str] = state.get("fields_required", [])
     field_values: Dict[str, str] = state.get("field_values", {})
-    conversation_history: List[BaseMessage] = state.get("conversation_history", [])
-
     # Determine remaining fields to fill
     remaining_fields = [f for f in required_fields if f not in field_values]
 
