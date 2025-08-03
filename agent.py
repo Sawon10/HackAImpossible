@@ -30,7 +30,7 @@ initial_state = {
     "field_values": {},
     "current_field": None,
     "form_type": None,
-    "current_field_validation": None,
+    "current_field_valid": None,
 }
 
 def extract_fields_from_pdf(form_path: str) -> List[str]:
@@ -89,7 +89,7 @@ def select_form_type(state):
         "fields_required": fields,
     }
 
-def conversational_orchestration(state: Dict) -> Dict:
+def conversational_orchestration(state) -> Dict:
     """
     Orchestrator node that selects the next field to fill,
     invokes the conversational agent loop to get and confirm value,
@@ -106,13 +106,13 @@ def conversational_orchestration(state: Dict) -> Dict:
         return state
 
     current_field = remaining_fields[0]
-    validation_failed = state.get("current_field_validation", False)
+    validation_status = state.get("current_field_valid")
 
     # Build minimal context for conversational agent
     context = {
         "field": current_field,
         "fields_filled": field_values,
-        "validation_failed": validation_failed,
+        "validation_failed": validation_status,
     }
 
     # Run the interactive agent dialog loop to get confirmed input and updated history
@@ -124,7 +124,7 @@ def conversational_orchestration(state: Dict) -> Dict:
         **state,
         "current_field": current_field,
         "query": confirmed_value,
-        "current_field_validation": None,
+        "current_field_valid": validation_status,
     }
 
 
@@ -153,12 +153,12 @@ def validate_and_store_field(state):
 
     if response == "invalid":
         print(f"⚠️ Invalid input for field '{field}', please try again.")
-        return {**state, "current_field_validation": False}  # Keep same field, await corrected input
+        return {**state, "current_field_valid": False}  # Keep same field, await corrected input
 
     # Save validated result
     updated_values = state["field_values"].copy()
     updated_values[field] = response
-    return {**state, "field_values": updated_values, "current_field_validation": True}
+    return {**state, "field_values": updated_values, "current_field_valid": True}
 
 
 def finalize_form(state):
@@ -189,7 +189,7 @@ class FormState(TypedDict):
     field_values: Dict[str, str]
     current_field: Optional[str]
     form_type: Optional[str]
-    current_field_validation: Optional[bool]
+    current_field_valid: Optional[bool]
 
 # Define the state graph
 form_graph = StateGraph(FormState)

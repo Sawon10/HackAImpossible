@@ -44,10 +44,10 @@ def conversational_speech_agent(context: Dict[str, object]) -> str:
 
     field = context["field"]
     filled_fields = context.get("fields_filled", {})
-    validation_failed = context.get("validation_failed", False)
+    validation_status = context.get("validation_status")
 
     extracted_value = None
-    if validation_failed:
+    if validation_status == False:
         prompt_for_field = (
             f"you were filing out the {field} field, but the last value you provided was invalid. "
             f"The previous value user provided for '{field}' was invalid or unclear. "

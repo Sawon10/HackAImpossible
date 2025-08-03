@@ -1,6 +1,6 @@
 from langchain.chat_models import init_chat_model
 from langgraph.prebuilt import create_react_agent
-from tools import validate_date, validate_id, validate_numeric, validate_name
+from tools import validate_date, validate_id, validate_numeric, validate_name, validate_address
 from dotenv import load_dotenv
 import os
 
@@ -20,7 +20,7 @@ def init_validation_agent():
     """
 
     # Register the validator tools
-    tools = [validate_date, validate_id, validate_numeric, validate_name]
+    tools = [validate_date, validate_id, validate_numeric, validate_name, validate_address]
 
     # Create the ReAct agent
     return create_react_agent(model, tools=tools, prompt=validation_prompt)

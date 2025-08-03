@@ -77,3 +77,18 @@ def validate_numeric(value: str, min_value: float = 0, max_value: float = 1e6) -
     except Exception:
         pass
     return "invalid"
+
+@tool
+def validate_address(value: str) -> str:
+    """
+    Validates an address (simple: must be at least 10 characters, contain letters and numbers).
+    Returns the cleaned address or 'invalid'.
+    """
+    if not value or not isinstance(value, str):
+        return "invalid"
+    value = value.strip()
+    # Simple requirement: address has at least 10 chars, some letters, some digits
+    if len(value) >= 10 and re.search(r"[A-Za-z]", value) and re.search(r"\d", value):
+        return value
+    return "invalid"
+
